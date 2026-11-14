@@ -1,53 +1,49 @@
 from fastapi import FastAPI
 from apify_client import ApifyClient
-from dotenv import load_dotenv
-import os
-from pathlib import Path
 import traceback
 
 app = FastAPI()
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-apify_token = os.getenv("APIFY_API_TOKEN")
-
-if not apify_token:
-    raise RuntimeError("APIFY_API_TOKEN is missing from the .env file")
-
-client = ApifyClient(apify_token)
+# Make sure your token is still being loaded correctly here!
+client = ApifyClient("YOUR_APIFY_API_TOKEN")
 
 
 @app.get("/get_price")
 def get_price(origin: str, dest: str, date: str):
     try:
-        # Prepare the input for the Apify Google Flights Scraper Actor
         run_input = {
             "origin": origin,
             "destination": dest,
-            "departureDate": date,  # Already in YYYY-MM-DD format
+            "departureDate": date,
             "cabinClass": "economy",
             "currency": "MYR",
             "adults": 1,
-            "maxResults": 10,  # Keep low to speed up the scrape
+            "maxResults": 10,
         }
 
-        # Start the Actor and wait for it to finish (this takes 10-25 seconds)
         run = client.actor("automation-lab/google-flights-scraper").call(
             run_input=run_input
         )
 
-        # Fetch the results from the Actor's dataset
-        dataset_items = client.dataset(run["defaultDatasetId"]).list_items().items
+        # --- THE FIX ---
+        # Dynamically extract the dataset ID whether Apify returns a Pydantic object or a dictionary
+        dataset_id = getattr(run, "default_dataset_id", None) or getattr(
+            run, "defaultDatasetId", None
+        )
+        if not dataset_id and isinstance(run, dict):
+            dataset_id = run.get("defaultDatasetId")
+
+        # Use the safely extracted ID
+        dataset_items = client.dataset(dataset_id).list_items().items
 
         if not dataset_items:
             return {"route": f"{origin} -> {dest}", "lowest_price": "N/A"}
 
-        # Filter for non-stop flights manually just in case
         direct_flights = [f for f in dataset_items if f.get("stops") == 0]
 
         if not direct_flights:
             return {"route": f"{origin} -> {dest}", "lowest_price": "N/A"}
 
-        # The actor usually returns them sorted by price, but let's be safe
         cheapest_flight = min(
             direct_flights, key=lambda x: x.get("price", float("inf"))
         )
