@@ -1,11 +1,13 @@
 from fastapi import FastAPI
 from apify_client import ApifyClient
 import traceback
+import os
 
 app = FastAPI()
 
-# Make sure your token is still being loaded correctly here!
-client = ApifyClient("YOUR_APIFY_API_TOKEN")
+# Safely pull the token from Render's Environment Variables
+apify_token = os.getenv("APIFY_API_TOKEN")
+client = ApifyClient(apify_token)
 
 
 @app.get("/get_price")
@@ -25,15 +27,13 @@ def get_price(origin: str, dest: str, date: str):
             run_input=run_input
         )
 
-        # --- THE FIX ---
-        # Dynamically extract the dataset ID whether Apify returns a Pydantic object or a dictionary
+        # Dynamically extract the dataset ID
         dataset_id = getattr(run, "default_dataset_id", None) or getattr(
             run, "defaultDatasetId", None
         )
         if not dataset_id and isinstance(run, dict):
             dataset_id = run.get("defaultDatasetId")
 
-        # Use the safely extracted ID
         dataset_items = client.dataset(dataset_id).list_items().items
 
         if not dataset_items:
