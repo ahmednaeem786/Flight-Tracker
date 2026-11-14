@@ -59,7 +59,7 @@ internal fun updateAppWidget(context: Context, appWidgetManager: AppWidgetManage
     val dest = loadDestPref(context, appWidgetId)
 
     // Target date (you can hardcode this or update it later)
-    val targetDate = "2027-01-15"
+    val targetDate = "2027-02-27"
 
     // 2. Set the initial loading state on the widget
     val views = RemoteViews(context.packageName, R.layout.new_app_widget)

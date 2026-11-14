@@ -1,3 +1,4 @@
 fastapi
 uvicorn
-fast-flights
+apify-client
+python-dotenv
