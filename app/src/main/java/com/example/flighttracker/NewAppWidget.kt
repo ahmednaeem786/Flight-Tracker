@@ -72,7 +72,7 @@ internal fun updateAppWidget(context: Context, appWidgetManager: AppWidgetManage
     Thread {
         try {
             // Construct the exact URL for your Render API
-            val urlString = "https://flight-tracker-407r.onrender.com/get_price?origin=$origin&dest=$dest&date=$targetDate"
+            val urlString = "https://gist.github.com/ahmednaeem786/54af506edd3fe6a18de726e32ffbc58a"
 
             // Make the request and parse the JSON string
             val response = URL(urlString).readText()

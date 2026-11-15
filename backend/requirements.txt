@@ -1,4 +1,2 @@
-fastapi
-uvicorn
-apify-client
-python-dotenv
+playwright
+requests

@@ -1,61 +1,66 @@
-from fastapi import FastAPI
-from apify_client import ApifyClient
-import traceback
 import os
+import json
+import requests
+from playwright.sync_api import sync_playwright
 
-app = FastAPI()
-
-# Safely pull the token from Render's Environment Variables
-apify_token = os.getenv("APIFY_API_TOKEN")
-client = ApifyClient(apify_token)
+GIST_ID = os.getenv("GIST_ID")
+GIST_TOKEN = os.getenv("GIST_TOKEN")
 
 
-@app.get("/get_price")
-def get_price(origin: str, dest: str, date: str):
-    try:
-        run_input = {
-            "origin": origin,
-            "destination": dest,
-            "departureDate": date,
-            "cabinClass": "economy",
-            "currency": "MYR",
-            "adults": 1,
-            "maxResults": 10,
-        }
+def update_gist(price_data):
+    url = f"https://api.github.com/gists/{GIST_ID}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    payload = {"files": {"flight_price.json": {"content": json.dumps(price_data)}}}
+    requests.patch(url, headers=headers, json=payload)
 
-        run = client.actor("automation-lab/google-flights-scraper").call(
-            run_input=run_input
-        )
 
-        # Dynamically extract the dataset ID
-        dataset_id = getattr(run, "default_dataset_id", None) or getattr(
-            run, "defaultDatasetId", None
-        )
-        if not dataset_id and isinstance(run, dict):
-            dataset_id = run.get("defaultDatasetId")
+def run():
+    with sync_playwright() as p:
+        # GitHub Actions has 7GB RAM, so Chromium runs flawlessly here
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
 
-        dataset_items = client.dataset(dataset_id).list_items().items
+        origin, dest, date = "KUL", "KHI", "2027-02-27"
 
-        if not dataset_items:
-            return {"route": f"{origin} -> {dest}", "lowest_price": "N/A"}
+        try:
+            # Point this directly at Batik Air, Skyscanner, or Kayak
+            # You can inject your specific Batik Air DOM clicking logic here
+            page.goto(
+                f"https://www.skyscanner.com.my/transport/flights/kul/khi/270227/?adultsv2=1&cabinclass=economy&rtn=0&preferdirects=true",
+                wait_until="networkidle",
+            )
 
-        direct_flights = [f for f in dataset_items if f.get("stops") == 0]
+            # Extract the raw text containing RM
+            page.wait_for_selector("text=/RM[0-9,]+/", timeout=20000)
+            price_texts = page.locator("text=/RM[0-9,]+/").all_inner_texts()
 
-        if not direct_flights:
-            return {"route": f"{origin} -> {dest}", "lowest_price": "N/A"}
+            clean_prices = []
+            for text in price_texts:
+                try:
+                    num_str = "".join(c for c in text if c.isdigit() or c == ".")
+                    if num_str and float(num_str) > 50:
+                        clean_prices.append(float(num_str))
+                except ValueError:
+                    continue
 
-        cheapest_flight = min(
-            direct_flights, key=lambda x: x.get("price", float("inf"))
-        )
+            lowest_price = min(clean_prices) if clean_prices else "Hidden"
+            price_str = (
+                f"RM {lowest_price:g}"
+                if isinstance(lowest_price, float)
+                else lowest_price
+            )
 
-        return {
-            "route": f"{origin} -> {dest}",
-            "lowest_price": f"RM {cheapest_flight['price']}",
-        }
+            output = {"route": f"{origin} -> {dest}", "lowest_price": price_str}
 
-    except Exception as e:
-        return {
-            "error_type": type(e).__name__,
-            "error_detail": str(e),
-            "traceback": traceback.format_exc(),
-        }
+        except Exception as e:
+            output = {"route": f"{origin} -> {dest}", "lowest_price": "Scraper Error"}
+
+        browser.close()
+        update_gist(output)
+
+
+if __name__ == "__main__":
+    run()
