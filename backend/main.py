@@ -56,6 +56,12 @@ def run():
             output = {"route": f"{origin} -> {dest}", "lowest_price": price_str}
 
         except Exception as e:
+            # THIS IS THE FIX: Print the exact error to the GitHub Actions console
+            import traceback
+
+            print("❌ SCRAPER CRASHED! Here is the exact error:")
+            print(traceback.format_exc())
+
             output = {"route": f"{origin} -> {dest}", "lowest_price": "Scraper Error"}
 
         browser.close()
