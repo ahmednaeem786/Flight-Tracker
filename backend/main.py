@@ -21,7 +21,11 @@ def run():
     with sync_playwright() as p:
         # GitHub Actions has 7GB RAM, so Chromium runs flawlessly here
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
 
         origin, dest, date = "KUL", "KHI", "2027-02-27"
 
@@ -30,7 +34,7 @@ def run():
             # You can inject your specific Batik Air DOM clicking logic here
             page.goto(
                 f"https://www.skyscanner.com.my/transport/flights/kul/khi/270227/?adultsv2=1&cabinclass=economy&rtn=0&preferdirects=true",
-                wait_until="networkidle",
+                wait_until="domcontentloaded",
             )
 
             # Extract the raw text containing RM
