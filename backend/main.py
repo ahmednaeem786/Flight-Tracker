@@ -10,7 +10,7 @@ GIST_TOKEN = os.getenv("GIST_TOKEN")
 def update_gist(price_data):
     url = f"https://api.github.com/gists/{GIST_ID}"
     headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
+        "Authorization": f"token {GIST_TOKEN}",
         "Accept": "application/vnd.github.v3+json",
     }
     payload = {"files": {"flight_price.json": {"content": json.dumps(price_data)}}}
