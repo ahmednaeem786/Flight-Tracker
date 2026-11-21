@@ -1,84 +1,113 @@
 import os
 import json
 import requests
-import re
-import traceback
-from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync
+from datetime import datetime, timezone, timedelta
+from apify_client import ApifyClient
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
 
 GIST_ID = os.getenv("GIST_ID")
-GIST_TOKEN = os.getenv("GIST_TOKEN")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN") or os.getenv("GIST_TOKEN")
+APIFY_TOKEN = os.getenv("APIFY_API_TOKEN")
+
+ACTOR_ID = "p8tZlhUqCGtzZXHzj"
+OUTBOUND_DATE = "2027-02-27"  # KUL -> KHI (OD135)
+RETURN_DATE = "2027-03-13"  # KHI -> KUL (OD136)
 
 
 def update_gist(price_data):
     url = f"https://api.github.com/gists/{GIST_ID}"
     headers = {
-        "Authorization": f"token {GIST_TOKEN}",
+        "Authorization": f"token {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json",
     }
-    payload = {"files": {"flight_price.json": {"content": json.dumps(price_data)}}}
-    requests.patch(url, headers=headers, json=payload)
+    payload = {
+        "files": {"flight_price.json": {"content": json.dumps(price_data, indent=2)}}
+    }
+    res = requests.patch(url, headers=headers, json=payload)
+    res.raise_for_status()
+
+
+def fetch_leg(client, origin, destination, date_str):
+    run_input = {
+        "origin": origin,
+        "destination": destination,
+        "site": "kayak",
+        "departureDate": date_str,
+        "adults": 1,
+        "children": 0,
+        "cabinClass": "economy",
+        "sortBy": "best",
+        "maxResults": 10,  # Capped to 10 rows (~$0.01/leg)
+        "maxStops": "any",
+        "currency": "MYR",
+        "allProviders": False,  # Keeps row count low
+        "routes": [],
+        "proxyConfiguration": {"useApifyProxy": True},
+    }
+
+    actor_run = client.actor(ACTOR_ID).call(run_input=run_input)
+    dataset_id = (
+        getattr(actor_run, "default_dataset_id", None) or actor_run["defaultDatasetId"]
+    )
+    items = client.dataset(dataset_id).list_items().items
+
+    valid_flights = [f for f in items if f.get("price") is not None]
+    direct_flights = [f for f in valid_flights if f.get("stops") == 0]
+
+    if direct_flights:
+        best_direct = min(direct_flights, key=lambda x: float(x["price"]))
+        direct_price = f"RM {round(float(best_direct['price'])):,}"
+        airline = best_direct.get("airline", "Direct")
+    else:
+        direct_price = "N/A"
+        airline = "No Direct"
+
+    if valid_flights:
+        best_any = min(valid_flights, key=lambda x: float(x["price"]))
+        cheapest_any = (
+            f"RM {round(float(best_any['price'])):,} ({best_any.get('airline', '')})"
+        )
+    else:
+        cheapest_any = "N/A"
+
+    return {
+        "route": f"{origin} -> {destination}",
+        "date": date_str,
+        "airline": airline,
+        "lowest_price": direct_price,
+        "cheapest_any": cheapest_any,
+    }
 
 
 def run():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+    client = ApifyClient(APIFY_TOKEN)
+    myt = timezone(timedelta(hours=8))
+    updated_at = datetime.now(myt).strftime("%d %b, %I:%M %p")
 
-        # Emulate a standard Windows Chrome browser
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080},
-        )
-        page = context.new_page()
+    output = {"updated_at": updated_at}
 
-        # Apply stealth to bypass basic Cloudflare checks
-        stealth_sync(page)
-
-        origin, dest, date = "KUL", "KHI", "2027-02-27"
-
+    for key, orig, dest, date_str in [
+        ("outbound", "KUL", "KHI", OUTBOUND_DATE),
+        ("inbound", "KHI", "KUL", RETURN_DATE),
+    ]:
         try:
-            # Trip.com's URL structure is very scraper-friendly
-            url = f"https://my.trip.com/flights/{origin.lower()}-to-{dest.lower()}/tickets-{origin.lower()}-{dest.lower()}?FlightWay=OW&ddate={date}"
-
-            # Go to the page and wait for the network to settle
-            page.goto(url, wait_until="domcontentloaded", timeout=45000)
-
-            # Trip.com uses both "MYR" and "RM". Wait for either to appear.
-            page.wait_for_selector("text=/MYR|RM/", timeout=25000)
-
-            # Scrape the entire page content to catch all prices
-            content = page.content()
-
-            # Find all numbers preceded by MYR or RM
-            raw_prices = re.findall(r"(?:MYR|RM)\s?([0-9,.]+)", content)
-
-            clean_prices = []
-            for text in raw_prices:
-                try:
-                    num_str = "".join(c for c in text if c.isdigit() or c == ".")
-                    num_str = num_str.rstrip(".")
-                    if num_str and float(num_str) > 50:  # Ignore tiny add-on fees
-                        clean_prices.append(float(num_str))
-                except ValueError:
-                    continue
-
-            lowest_price = min(clean_prices) if clean_prices else "Hidden"
-            price_str = (
-                f"RM {lowest_price:g}"
-                if isinstance(lowest_price, float)
-                else lowest_price
-            )
-
-            output = {"route": f"{origin} -> {dest}", "lowest_price": price_str}
-
+            output[key] = fetch_leg(client, orig, dest, date_str)
         except Exception as e:
-            print("❌ SCRAPER CRASHED! Saving screenshot...")
-            print(traceback.format_exc())
-            page.screenshot(path="crash_screenshot.png", full_page=True)
-            output = {"route": f"{origin} -> {dest}", "lowest_price": "Scraper Error"}
+            print(f"Error fetching {orig}->{dest}: {e}")
+            output[key] = {
+                "route": f"{orig} -> {dest}",
+                "date": date_str,
+                "lowest_price": "Error",
+            }
 
-        browser.close()
-        update_gist(output)
+    update_gist(output)
+    print("Updated Gist:", json.dumps(output, indent=2))
 
 
 if __name__ == "__main__":
