@@ -27,6 +27,7 @@ KWGT widget on Android
 - Searches economy flights in Malaysian ringgit (MYR).
 - Separates direct-flight pricing from the cheapest available flight.
 - Publishes one JSON document to a GitHub Gist.
+- Sends an email when a direct outbound or inbound lowest price changes.
 - Runs automatically every six hours through GitHub Actions.
 - Can also be started manually from the Actions tab.
 - Generates a `.kwgt` preset for a KUL/KHI boarding-pass-style KWGT widget.
@@ -67,6 +68,7 @@ You need:
 - An Apify account and API token.
 - A GitHub account with permission to update a Gist.
 - An existing GitHub Gist containing a file named `flight_price.json`.
+- A Gmail account and Gmail App Password if you want fare-change email notifications.
 - KWGT/Kustom Widget Maker on Android if you want to use the widget.
 
 The Apify actor may incur usage charges according to your Apify plan. The scraper is limited to 10 results per leg to keep the request small.
@@ -87,11 +89,15 @@ Set the following variables in `.env`:
 APIFY_API_TOKEN=your_apify_api_token
 GIST_ID=your_github_gist_id
 GIST_TOKEN=your_github_personal_access_token
+GMAIL_USER=your_email@gmail.com
+GMAIL_APP_PASSWORD=your_gmail_app_password
 ```
 
 `GITHUB_TOKEN` may be used instead of `GIST_TOKEN`; the code checks `GITHUB_TOKEN` first and falls back to `GIST_TOKEN`.
 
-Do not commit `.env`. It is ignored by `.gitignore`. Never put a real token in `README.md`, source code, a public Gist, or a GitHub Actions workflow file.
+`GMAIL_USER` and `GMAIL_APP_PASSWORD` are optional. When both are set, the script compares the current Gist prices with the newly fetched prices and sends a Gmail SMTP message if the outbound or inbound `lowest_price` changed. Use a Gmail App Password, not your regular Google account password.
+
+Do not commit `.env`. It is ignored by `.gitignore`. Never put a real token or App Password in `README.md`, source code, a public Gist, or a GitHub Actions workflow file.
 
 ### Python dependencies
 
@@ -173,6 +179,10 @@ Add these repository secrets under **Settings -> Secrets and variables -> Action
 | `APIFY_API_TOKEN` | Authenticates Apify actor runs |
 | `GIST_ID` | Identifies the destination Gist |
 | `GIST_TOKEN` | Allows the workflow to update the Gist |
+| `GMAIL_USER` | Gmail sender and recipient address |
+| `GMAIL_APP_PASSWORD` | Gmail App Password used for SMTP authentication |
+
+Both Gmail secrets are optional. The workflow will skip notifications when either one is missing.
 
 To trigger it manually:
 
@@ -182,7 +192,7 @@ To trigger it manually:
 4. Select **Run workflow**.
 5. Choose the branch and confirm.
 
-Review the workflow logs for the `Updated Gist` output and any per-leg errors.
+Review the workflow logs for the `Updated Gist` output, per-leg errors, or `No fare change detected; skipping email.` If a notification is sent, the log prints `Email notification sent` with the changed legs.
 
 ## Generate the KWGT Preset
 
@@ -246,6 +256,17 @@ The Gist is updated with a document shaped like this:
 
 The Apify call or response parsing failed for that leg. Open the GitHub Actions log or run the script locally to see the printed exception.
 
+### Fare-change email is not received
+
+Check that:
+
+- `GMAIL_USER` and `GMAIL_APP_PASSWORD` are set locally or as GitHub Actions secrets.
+- `GMAIL_APP_PASSWORD` is a Gmail App Password for the configured account.
+- Both outbound and inbound `lowest_price` values changed or were initially available as priced values.
+- The script can read the existing Gist before the Gist is overwritten.
+
+The script deliberately sends no email when no fare change is detected.
+
 ### Gist update fails with an authentication error
 
 Check that:
@@ -278,7 +299,8 @@ Verify the airport codes, date format (`YYYY-MM-DD`), Apify token, actor availab
 - Keep `.env` private.
 - Store production credentials only in GitHub Actions secrets.
 - Use a GitHub token with the smallest practical scope for updating Gists.
-- Do not print tokens in logs or commit them to the repository.
+- Use a Gmail App Password and never the normal Google account password.
+- Do not print tokens or App Passwords in logs or commit them to the repository.
 - Rotate tokens immediately if one is exposed.
 
 ## License
