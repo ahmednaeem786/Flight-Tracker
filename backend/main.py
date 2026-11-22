@@ -1,5 +1,7 @@
 import os
 import json
+import smtplib
+from email.message import EmailMessage
 import requests
 from datetime import datetime, timezone, timedelta
 from apify_client import ApifyClient
@@ -18,6 +20,54 @@ APIFY_TOKEN = os.getenv("APIFY_API_TOKEN")
 ACTOR_ID = "p8tZlhUqCGtzZXHzj"
 OUTBOUND_DATE = "2027-02-27"  # KUL -> KHI (OD135)
 RETURN_DATE = "2027-03-13"  # KHI -> KUL (OD136)
+
+
+def notify_if_price_changed(gist_id: str, new_data: dict):
+    gmail_user = os.getenv("GMAIL_USER")
+    gmail_pass = os.getenv("GMAIL_APP_PASSWORD")
+    if not gmail_user or not gmail_pass:
+        return
+
+    # 1. Fetch the current Gist before overwriting it
+    resp = requests.get(f"https://api.github.com/gists/{gist_id}", timeout=15)
+    if resp.status_code != 200:
+        return
+
+    old_content = (
+        resp.json().get("files", {}).get("flight_price.json", {}).get("content", "{}")
+    )
+    old_data = json.loads(old_content)
+
+    # 2. Compare outbound and inbound lowest prices
+    changes = []
+    legs = [
+        ("outbound", "KUL -> KHI (27 Feb)"),
+        ("inbound", "KHI -> KUL (13 Mar)"),
+    ]
+    for key, label in legs:
+        old_price = old_data.get(key, {}).get("lowest_price")
+        new_price = new_data.get(key, {}).get("lowest_price")
+        if old_price and new_price and old_price != new_price:
+            changes.append(f"{label}: {old_price} -> {new_price}")
+
+    if not changes:
+        print("No fare change detected; skipping email.")
+        return
+
+    # 3. Send email via Gmail SMTP
+    msg = EmailMessage()
+    msg["Subject"] = f"Batik Air Fare Update: {' | '.join(changes)}"
+    msg["From"] = gmail_user
+    msg["To"] = gmail_user
+    msg.set_content(
+        "\n".join(changes) + f"\n\nUpdated: {new_data.get('updated_at', '')}"
+    )
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as smtp:
+        smtp.login(gmail_user, gmail_pass)
+        smtp.send_message(msg)
+
+    print("Email notification sent:", changes)
 
 
 def update_gist(price_data):
@@ -106,6 +156,7 @@ def run():
                 "lowest_price": "Error",
             }
 
+    notify_if_price_changed(GIST_ID, output)
     update_gist(output)
     print("Updated Gist:", json.dumps(output, indent=2))
 
